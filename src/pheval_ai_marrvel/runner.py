@@ -30,7 +30,7 @@ class AIMARRVELRunner(PhEvalRunner):
         Run AI-MARRVEL to produce the raw output.
         """
         print("running with AI-MARRVEL")
-        config = AIMARRVELConfigurations.parse_config(
+        config = AIMARRVELConfigurations.parse_obj(
             self.input_dir_config.tool_specific_configuration_options
         )
         run_commands(
