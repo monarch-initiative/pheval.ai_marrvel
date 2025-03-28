@@ -1,40 +1,29 @@
 from pathlib import Path
 
-import click
-
 from pheval_ai_marrvel.post_process.post_process_results_format import create_standardised_results
 
 
-def post_process_results(raw_results_dir: Path, output_dir: Path) -> None:
+def post_process_results(
+    raw_results_dir: Path,
+    output_dir: Path,
+    phenopacket_dir: Path,
+    gene_analysis: bool,
+    variant_analysis: bool,
+) -> None:
     """
     Post-process AI-MARRVEL raw results and create standardised PhEval TSV results.
 
     Args:
-        raw_results_dir (Path): Path to the raw results directory.
+        raw_results_dir (Path): Path to the raw result directory.
         output_dir (Path): Path to the output directory.
+        phenopacket_dir (Path): Path to the directory containing the phenopackets.
+        gene_analysis (bool): Whether the generate gene results.
+        variant_analysis (bool): Whether the generate variant results.
     """
-    create_standardised_results(raw_results_dir, output_dir)
-
-
-@click.command()
-@click.option(
-    "--raw-results-dir",
-    "-r",
-    type=Path,
-)
-@click.option(
-    "--output-dir",
-    "-o",
-    type=Path,
-)
-def post_process(raw_results_dir: Path, output_dir: Path) -> None:
-    """
-    Post-process AI-MARRVEL raw results and create standardised PhEval TSV results.
-
-    Args:
-        raw_results_dir (Path): Path to the raw results directory.
-        output_dir (Path): Path to the output directory.
-    """
-    output_dir.joinpath("pheval_gene_results").mkdir(exist_ok=True)
-    output_dir.joinpath("pheval_variant_results").mkdir(exist_ok=True)
-    post_process_results(raw_results_dir, output_dir)
+    create_standardised_results(
+        raw_results_dir=raw_results_dir,
+        output_dir=output_dir,
+        phenopacket_dir=phenopacket_dir,
+        gene_analysis=gene_analysis,
+        variant_analysis=variant_analysis,
+    )

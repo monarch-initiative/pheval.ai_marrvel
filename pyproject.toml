@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pheval-ai-marrvel"
-version = "0.1.9"
+version = "0.2.0"
 description = ""
 authors = ["Yasemin Bridges <y.bridges@qmul.ac.uk>"]
 readme = "README.md"
@@ -9,7 +9,7 @@ packages = [{include = "pheval_ai_marrvel", from = "src"}]
 [tool.poetry.dependencies]
 python = "^3.10"
 docker = "^7.1.0"
-pheval = "^0.4.0"
+pheval = "^0.5.2"
 
 [tool.poetry.scripts]
 pheval-ai = "pheval_ai_marrvel.cli:main"
