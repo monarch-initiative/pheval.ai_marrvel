@@ -1,15 +1,14 @@
+import uuid
 from pathlib import Path
-from typing import List
 
 import polars as pl
+from pheval.post_processing.phenopacket_truth_set import calculate_end_pos
 from pheval.post_processing.post_processing import (
-    PhEvalGeneResult,
-    PhEvalVariantResult,
-    calculate_end_pos,
-    generate_pheval_result,
+    SortOrder,
+    generate_gene_result,
+    generate_variant_result,
 )
 from pheval.utils.file_utils import all_files
-from pheval.utils.phenopacket_utils import GeneIdentifierUpdater, create_hgnc_dict
 
 
 def read_raw_result(raw_result_path: Path) -> pl.DataFrame:
@@ -22,197 +21,88 @@ def read_raw_result(raw_result_path: Path) -> pl.DataFrame:
     Returns:
         pl.DataFrame: Contents of the raw result file.
     """
-    raw_result = pl.read_csv(raw_result_path)
-    raw_result = raw_result.rename({"Unnamed: 0": "variant"})
-    raw_result = raw_result.select(pl.col(["variant", "predict", "geneSymbol", "ranking"]))
-    grouped_gene_symbols = (
-        raw_result.group_by("variant", maintain_order=True)
-        .agg(pl.col("geneSymbol").unique(maintain_order=True))
-        .select(pl.col("geneSymbol"))
-        .rename({"geneSymbol": "groupedGeneSymbol"})
+    return (
+        pl.read_csv(raw_result_path)
+        .rename({"Unnamed: 0": "variant"})
+        .select(pl.col(["variant", "predict", "geneSymbol", "geneEnsId"]))
+        .unique(["variant", "geneSymbol"], maintain_order=True)
     )
-    raw_result = raw_result.unique(subset=["variant"], maintain_order=True)
-    raw_result = raw_result.hstack(grouped_gene_symbols)
-    return raw_result
 
 
-class ConvertToPhEvalResult:
-    """Class to convert the raw result file to PhEvalGeneResult and PhEvalVariantResult."""
-
-    def __init__(self, raw_result: pl.DataFrame, gene_identifier_updater: GeneIdentifierUpdater):
-        """
-        Initialise the ConvertToPhEvalResult class.
-
-        Args:
-            raw_result (pl.DataFrame): Contents of the raw result file.
-
-        """
-        self.raw_result = raw_result
-        self.gene_identifier_updater = gene_identifier_updater
-
-    @staticmethod
-    def _obtain_score(result_entry: dict) -> float:
-        """
-        Obtain the score from the result entry.
-
-        Args:
-            result_entry (dict): Contents of the result entry.
-
-        Returns:
-            float: The score.
-        """
-        return result_entry["predict"]
-
-    @staticmethod
-    def _obtain_gene_symbol(result_entry: dict) -> List[str]:
-        """
-        Obtain the gene symbol from the result entry.
-
-        Args:
-            result_entry (dict): Contents of the result entry.
-
-        Returns:
-            str: The gene symbol.
-        """
-        return result_entry["groupedGeneSymbol"]
-
-    def obtain_gene_identifier(self, result_entry: dict) -> List[str]:
-        """
-        Obtain the gene identifier from the result entry.
-
-        Args:
-            result_entry (dict): Contents of the result entry.
-
-        Returns:
-            str: The gene identifier.
-        """
-        gene_symbols = self._obtain_gene_symbol(result_entry)
-        return [
-            self.gene_identifier_updater.find_identifier(gene_symbol)
-            for gene_symbol in gene_symbols
+def extract_gene_results(raw_result: pl.DataFrame) -> pl.DataFrame:
+    return raw_result.select(
+        [
+            pl.col("predict").alias("score").cast(pl.Float64),
+            pl.col("geneSymbol").alias("gene_symbol").cast(pl.String),
+            pl.col("geneEnsId").alias("gene_identifier").cast(pl.String),
+            pl.col("variant")
+            .map_elements(lambda v: str(uuid.uuid5(uuid.NAMESPACE_DNS, v)), return_dtype=pl.Utf8)
+            .alias("grouping_id"),
         ]
-
-    @staticmethod
-    def obtain_chrom(variant_str: str) -> str:
-        """
-        Obtain the chromosome from the variant entry.
-
-        Args:
-            variant_str (str): Variant entry.
-
-        Returns:
-            str: The chromosome.
-        """
-        return variant_str.split("-")[0]
-
-    @staticmethod
-    def obtain_pos(variant_str: str) -> int:
-        """
-        Obtain the position from the variant entry.
-
-        Args:
-            variant_str (str): Variant entry.
-
-        Returns:
-            int: The position.
-        """
-        return int(variant_str.split("-")[1])
-
-    @staticmethod
-    def obtain_ref(variant_str: str) -> str:
-        """
-        Obtain the reference allele from the variant entry.
-
-        Args:
-            variant_str (str): Variant entry.
-
-        Returns:
-            str: The reference allele.
-        """
-        return variant_str.split("-")[2]
-
-    @staticmethod
-    def obtain_alt(variant_str: str) -> str:
-        """
-        Obtain the alternate allele from the variant entry.
-
-        Args:
-            variant_str (str): Variant entry.
-
-        Returns:
-            str: The alternate allele.
-        """
-        return variant_str.split("-")[3]
-
-    def extract_pheval_gene_requirements(self) -> List[PhEvalGeneResult]:
-        """
-        Extract the data required to produce PhEval gene output.
-
-        Returns:
-            List[PhEvalGeneResult]: List of PhEvalGeneResult objects.
-        """
-        pheval_result = []
-        for result_entry in self.raw_result.rows(named=True):
-            pheval_result.append(
-                PhEvalGeneResult(
-                    gene_symbol=self._obtain_gene_symbol(result_entry),
-                    gene_identifier=self.obtain_gene_identifier(result_entry),
-                    score=self._obtain_score(result_entry),
-                )
-            )
-        return pheval_result
-
-    def extract_pheval_variant_requirements(self) -> List[PhEvalVariantResult]:
-        """
-        Extract the data required to produce PhEval variant output.
-
-        Returns:
-            List[PhEvalVariantResult]: List of PhEvalVariantResult objects.
-        """
-        pheval_result = []
-        for result_entry in self.raw_result.rows(named=True):
-            pheval_result.append(
-                PhEvalVariantResult(
-                    score=self._obtain_score(result_entry),
-                    chromosome=self.obtain_chrom(result_entry["variant"]),
-                    start=self.obtain_pos(result_entry["variant"]),
-                    end=calculate_end_pos(
-                        self.obtain_pos(result_entry["variant"]),
-                        self.obtain_ref(result_entry["variant"]),
-                    ),
-                    ref=self.obtain_ref(result_entry["variant"]),
-                    alt=self.obtain_alt(result_entry["variant"]),
-                )
-            )
-        return pheval_result
+    )
 
 
-def create_standardised_results(raw_results_dir: Path, output_dir: Path) -> None:
+def extract_variant_results(raw_result: pl.DataFrame) -> pl.DataFrame:
+    return (
+        raw_result.unique(subset="variant", maintain_order=True)
+        .with_columns(
+            [
+                pl.col("variant").str.split("-").alias("split_variant"),
+            ]
+        )
+        .select(
+            [
+                pl.col("split_variant").list.get(0).alias("chrom").cast(pl.String),
+                pl.col("split_variant").list.get(1).alias("start").cast(pl.Int64),
+                pl.col("split_variant").list.get(2).alias("ref").cast(pl.String),
+                pl.col("split_variant").list.get(3).alias("alt").cast(pl.String),
+                pl.col("predict").alias("score").cast(pl.Float64),
+            ]
+        )
+        .with_columns(
+            pl.struct("start", "ref")
+            .map_elements(lambda x: calculate_end_pos(x["start"], x["ref"]))
+            .alias("end")
+            .cast(pl.String)
+        )
+    )
+
+
+def create_standardised_results(
+    raw_results_dir: Path,
+    output_dir: Path,
+    phenopacket_dir: Path,
+    gene_analysis: bool,
+    variant_analysis: bool,
+) -> None:
     """
     Create PhEval gene and variant tsv output from raw results.
 
     Args:
-        raw_results_dir (Path): Path to the raw results directory.
+        raw_results_dir (Path): Path to the raw result directory.
         output_dir (Path): Path to the output directory.
+        phenopacket_dir (Path): Path to the phenopacket directory.
+        gene_analysis (bool): Whether to generate gene results.
+        variant_analysis (bool): Whether to generate variant results.
     """
-    gene_identifier_updator = GeneIdentifierUpdater(
-        gene_identifier="ensembl_id", hgnc_data=create_hgnc_dict()
-    )
     raw_results = [file for file in all_files(raw_results_dir) if "_integrated.csv" in file.name]
     for raw_result_path in raw_results:
         raw_result = read_raw_result(raw_result_path)
-        converter = ConvertToPhEvalResult(raw_result, gene_identifier_updator)
-        pheval_gene_result = converter.extract_pheval_gene_requirements()
-        generate_pheval_result(
-            pheval_result=pheval_gene_result,
-            sort_order_str="DESCENDING",
-            output_dir=output_dir,
-            tool_result_path=Path(str(raw_result_path).replace("_integrated", "")),
-        )
-        pheval_variant_result = converter.extract_pheval_variant_requirements()
-        generate_pheval_result(
-            pheval_result=pheval_variant_result,
-            sort_order_str="DESCENDING",
-            output_dir=output_dir,
-            tool_result_path=Path(str(raw_result_path).replace("_integrated", "")),
-        )
+        if gene_analysis:
+            pheval_gene_result = extract_gene_results(raw_result)
+            generate_gene_result(
+                results=pheval_gene_result,
+                sort_order=SortOrder.DESCENDING,
+                output_dir=output_dir,
+                phenopacket_dir=phenopacket_dir,
+                result_path=Path(str(raw_result_path).replace("_integrated", "")),
+            )
+        if variant_analysis:
+            pheval_variant_result = extract_variant_results(raw_result)
+            generate_variant_result(
+                results=pheval_variant_result,
+                sort_order=SortOrder.DESCENDING,
+                output_dir=output_dir,
+                phenopacket_dir=phenopacket_dir,
+                result_path=Path(str(raw_result_path).replace("_integrated", "")),
+            )
